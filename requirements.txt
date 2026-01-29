@@ -1,20 +1,11 @@
-# 핵심 프레임워크 및 서버
+# 서버 및 API 프레임워크
 fastapi>=0.109.0
 uvicorn>=0.27.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
+pyngrok
 
-# AI 및 데이터 처리 (유연한 버전 적용)
-torch>=2.0.0
-numpy>=1.26.0
-pandas>=2.1.0
-scikit-learn>=1.3.0
-scipy>=1.11.0
-faiss-cpu>=1.7.4
-transformers>=4.36.0
-sentence-transformers>=2.2.2
-
-# RAG 및 LLM
+# LangChain 및 AI (OpenAI, LangGraph)
 langchain>=0.1.0
 langchain-openai>=0.0.5
 langchain-community>=0.0.20
@@ -23,20 +14,24 @@ langgraph>=0.0.26
 openai>=1.10.0
 tiktoken>=0.5.2
 
+# 벡터 데이터베이스
+faiss-cpu>=1.7.4
+
+# 데이터 처리 및 파일 로더 (Excel, Image)
+pandas>=2.1.0
+openpyxl                    # Excel 로딩(UnstructuredExcelLoader)에 필수
+unstructured[xlsx]          # Excel 로딩을 위해 [xlsx] 옵션 필요
+Pillow                      # PIL import (이미지 처리)
+pytesseract                 # OCR 처리
+
 # PDF 처리
-pypdf>=4.0.0
-fpdf2>=2.7.0
-md2pdf>=1.0.0
+PyPDF2                      # main.py에서 사용됨 (pypdf 권장되나 코드가 PyPDF2 기준임)
+
+# 이미지 캡셔닝 (ImageCaptionLoader 의존성)
+# 로컬 모델을 사용한다면 아래 두 개가 필요합니다. API 방식이라면 제거 가능하나, 안전하게 유지 권장.
+torch>=2.0.0
+transformers>=4.36.0
 
 # 유틸리티
 python-dotenv>=1.0.0
-nest-asyncio>=1.6.0
 requests>=2.31.0
-aiohttp>=3.9.0
-pyngrok
-
-# 시각화
-matplotlib>=3.8.0
-
-# Azure Blob Storage
-azure-storage-blob
