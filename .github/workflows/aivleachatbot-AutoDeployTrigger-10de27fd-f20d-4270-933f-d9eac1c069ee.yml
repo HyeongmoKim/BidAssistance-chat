@@ -1,29 +1,43 @@
 name: Trigger auto deployment for aivleachatbot
 
-# When this action will be executed
 on:
-  # Automatically trigger it when detected changes in repo
   push:
-    branches: 
-      [ main ]
+    branches: [ main ]
     paths:
-    - '**'
-    - '.github/workflows/aivleachatbot-AutoDeployTrigger-10de27fd-f20d-4270-933f-d9eac1c069ee.yml'
-
-  # Allow manual trigger 
-  workflow_dispatch:      
+      - '**'
+      - '.github/workflows/**'
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions: 
-      id-token: write #This is required for requesting the OIDC JWT Token
-      contents: read #Required when GH token is used to authenticate with private repo
+    permissions:
+      id-token: write # Azure 로그인용 (OIDC)
+      contents: read
 
     steps:
-      - name: Checkout to the branch
-        uses: actions/checkout@v2
+      # 1. 깃허브에서 코드 가져오기
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      # 2. Docker Registry(ACR) 로그인
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: aivleacr-fpc4geatahfjhygz.azurecr.io
+          username: ${{ secrets.AIVLEACHATBOT_REGISTRY_USERNAME }}
+          password: ${{ secrets.AIVLEACHATBOT_REGISTRY_PASSWORD }}
+
+      # 3. [중요] Docker 이미지 빌드 및 푸시 (Oryx를 쓰지 않고 표준 Docker 기능 사용)
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: aivleacr-fpc4geatahfjhygz.azurecr.io/aivleachatbot:${{ github.sha }}
+          file: ./Dockerfile  # Dockerfile이 루트에 있다고 가정
+
+      # 4. Azure 로그인
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -31,19 +45,11 @@ jobs:
           tenant-id: ${{ secrets.AIVLEACHATBOT_AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AIVLEACHATBOT_AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push container image to registry
+      # 5. Azure Container Apps에 "새 이미지 배포해"라고 명령만 내리기 (빌드 과정 생략)
+      - name: Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v2
         with:
-          appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: Dockerfile
-          _targetLabelKey_: _targetLabel_
-          registryUrl: aivleacr-fpc4geatahfjhygz.azurecr.io
-          registryUsername: ${{ secrets.AIVLEACHATBOT_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.AIVLEACHATBOT_REGISTRY_PASSWORD }}
-          containerAppName: aivleachatbot
           resourceGroup: Aivle08
-          imageToBuild: aivleacr-fpc4geatahfjhygz.azurecr.io/aivleachatbot:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
-
-
+          containerAppName: aivleachatbot
+          imageToDeploy: aivleacr-fpc4geatahfjhygz.azurecr.io/aivleachatbot:${{ github.sha }}
+          # appSourcePath, dockerfilePath 옵션을 다 뺐기 때문에 Oryx가 실행되지 않습니다.
