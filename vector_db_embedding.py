@@ -40,7 +40,7 @@ IMAGE_FAISS_DIR = BASE_DIR / "image_faiss"
 API_FAISS_DIR= BASE_DIR / "api_faiss"
 '''
 
-# ==========================
+# =========================
 # FAISS 생성 임베딩 모델 설정
 # =========================
 '''
