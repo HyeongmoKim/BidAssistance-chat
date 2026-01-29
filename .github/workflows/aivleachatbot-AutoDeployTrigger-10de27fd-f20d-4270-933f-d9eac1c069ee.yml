@@ -35,7 +35,7 @@ jobs:
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: _dockerfilePath_
+          _dockerfilePathKey_: Dockerfile
           _targetLabelKey_: _targetLabel_
           registryUrl: aivleacr-fpc4geatahfjhygz.azurecr.io
           registryUsername: ${{ secrets.AIVLEACHATBOT_REGISTRY_USERNAME }}
