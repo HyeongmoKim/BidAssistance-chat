@@ -1,5 +1,7 @@
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
+import json
+import re
 
 llm = ChatOpenAI(model="gpt-5-nano", temperature=1)
 
@@ -408,5 +410,61 @@ def extract_notice_query(user_query: str) -> dict:
     출력은 json 객체 하나만 반환한다.
     """
 
-    response = llm.invoke(prompt)
-    return response.content
+    def _extract_json_object(text: str) -> str:
+        """LLM 출력에서 JSON 객체(첫 { ... 마지막 })만 최대한 안전하게 추출"""
+        if not text:
+            return ""
+
+        s = text.strip()
+
+        # ```json ... ``` 또는 ``` ... ``` 제거
+        s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE).strip()
+        s = re.sub(r"\s*```$", "", s).strip()
+
+        # 첫 '{'부터 마지막 '}'까지 슬라이싱
+        start = s.find("{")
+        end = s.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return ""
+
+        return s[start:end + 1].strip()
+
+    def _error_payload() -> str:
+        """Java가 기대하는 스키마를 유지한 error JSON"""
+        obj = {
+            "filter": {
+                "bidRealId": None,
+                "region": None,
+                "organization": None,
+                "basicPrice": {"from": None, "to": None},
+                "estimatePrice": {"from": None, "to": None},
+                "minimumBidRate": {"from": None, "to": None},
+                "bidRange": {"from": None, "to": None},
+                "timeRange": None
+            },
+            "output": [
+                {
+                    "type": "error",
+                    "field": None,
+                    "op": None
+                }
+            ],
+            "limit": 3
+        }
+        return json.dumps(obj, ensure_ascii=False)
+
+    @tool
+    def extract_notice_query(user_query: str) -> dict:
+        ...
+        response = llm.invoke(prompt)
+
+        raw = response.content
+        candidate = _extract_json_object(raw)
+
+        try:
+            parsed = json.loads(candidate)
+            # 항상 JSON 문자열로 고정해서 반환
+            return json.dumps(parsed, ensure_ascii=False)
+        except Exception:
+            # 절대 예외 던지지 않음
+            return _error_payload()

@@ -127,20 +127,26 @@ def human_input_node(state: AgentState):
     last_msg = state["messages"][-1] if state["messages"] else None
     if last_msg and isinstance(last_msg, HumanMessage):
         print(f"\n[System] 사용자 입력 수신: {last_msg.content[:20]}...")
-    return None
+    return {}
 
 def router_node(state: AgentState):
-    """입력이 질문인지 db조회 결과인지 확인해주는 노드"""
-    data = state["messages"][-1].content.strip()
+    raw = state["messages"][-1].content
+    if not raw:
+        return "agent"
+
+    s = raw.strip()
+
+    # JSON일 가능성이 있는 경우만 파싱 시도
+    if not (s.startswith("{") and s.endswith("}")):
+        return "agent"
 
     try:
-        data = json.loads(data)
+        obj = json.loads(s)
+    except Exception:
+        return "agent"
 
-        if data.get("type") in ["notice_result", "report"]:
-            return "postprocess"
-
-    except:
-        pass
+    if obj.get("type") in ("notice_result", "report"):
+        return "postprocess"
 
     return "agent"
 
