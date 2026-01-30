@@ -168,13 +168,30 @@ async def chat_endpoint(req: ChatRequest):
         
         # 마지막 메시지(AI 답변) 추출
         last_message = final_state["messages"][-1]
+        final_text = last_message.content if last_message else ""
+
+        # ✅ 응답 type 결정 (요청 type(req.type) 말고 "결과" 기준)
+        resp_type = "chat"
+
+        # 후처리 요청이면 summary로 고정
+        if req.type in ("notice_result", "report"):
+            resp_type = "summary"
+        else:
+            # tool이 마지막이거나 JSON처럼 보이면 search로 분류
+            if isinstance(last_message, ToolMessage):
+                resp_type = "search"
+            else:
+                s = (final_text or "").strip()
+                if s.startswith("{") and s.endswith("}"):
+                    resp_type = "search"
 
         return {
-            "type": req.type,
-            "response": last_message.content,
+            "type": resp_type,  # ✅ 핵심: req.type이 아니라 resp_type
+            "response": final_text,
             "thread_id": req.thread_id
         }
-        
+
+
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
