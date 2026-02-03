@@ -82,29 +82,66 @@ SYSTEM_PROMPT = SystemMessage(
 
 llm_postprocess=ChatOpenAI(model="gpt-5-nano",temperature=1)
 
-SYSTEM_PROMPT_postprocess=SystemMessage(
+SYSTEM_PROMPT_notice_result=SystemMessage(
     content="""
-    너는 공공입찰 플랫폼 챗봇이다.
+    너는 공공입찰 공고 조회 결과(JSON 리스트)를 사용자에게 보기 좋게 자연어로 요약하는 도우미이다.
 
-    지금부터 너에게 전달되는 입력은
-    사용자의 질문이 아니라,
-    백엔드에서 조회한 공고 검색 결과(JSON 데이터)이다.
+    입력은 항상 공고 정보가 담긴 JSON 리스트이다.
 
-    너의 임무는 다음과 같다:
+    각 JSON 객체의 필드 의미는 아래와 같다:
 
-    1. JSON 데이터를 읽고 핵심 정보를 자연어로 요약한다.
-    2. 사용자가 이해할 수 있도록 공고 내용을 설명한다.
-    3. 만약 결과가 비어 있다면 "조건에 맞는 공고가 없습니다"라고 답한다.
-    4. JSON을 그대로 출력하지 말고 자연어로만 답한다.
+    - bidRealId = 공고번호
+    - name = 공고명
+    - region = 지역
+    - organization = 기관명
+    - startDate = 입찰 시작일
+    - endDate = 입찰 종료일
+    - openDate = 개찰일
+    - basicPrice = 기초금액
+    - estimatePrice = 추정가격
+    - minimumBidRate = 낙찰하한율
+    - bidRange = 예가범위
 
-    출력 예시:
+    규칙:
+    1. 반드시 입력 JSON에 있는 정보만 사용한다.
+    2. 없는 값(null)은 "정보 없음"으로 출력한다.
+    3. 공고는 1), 2), 3) 번호로 구분한다.
+    4. 금액은 천 단위 콤마를 넣어 "~원"으로 출력한다.
 
-    - "총 3건의 공고가 검색되었습니다."
-    - "기초금액 평균은 약 3억 원입니다."
-    - "낙찰하한율 최댓값은 87.5%입니다."
+    출력 형식:
 
+    [공고 목록]
+
+    1) 공고명 (공고번호)
+    - 지역/기관:
+    - 입찰기간: 시작일 ~ 종료일
+    - 개찰일:
+    - 기초 금액:
+    - 추정가격 :
+    - 낙찰하한율 : 
+    - 예가범위 :
+
+    입력 JSON 리스트를 받으면 즉시 위 형식으로 요약하라.
 """
 )
+
+SYSTEM_PROMPT_report=SystemMessage(
+    content="""
+    너는 공공입찰 공고 제안/투찰 분석 보고서를 사용자에게 핵심만 요약하는 도우미이다.
+
+    입력은 텍스트 파일이다.
+
+    섹션으로는 
+    # 1. 공고요약
+    # 2. 참가자격
+    # 3. 낙찰가 예측
+    # 4. 권고 액션
+    단, 내용에 근거가 불충분하면 '가정'으로 되어있다.
+    
+    3줄 정도로 간단히 요약해라.
+"""
+)
+
 
 def agent_node(state: AgentState):
     """LLM이 다음 행동(답변 or 툴호출)을 결정"""   
@@ -116,9 +153,24 @@ tool_node = ToolNode(tools)
 
 def postprocess_node(state: AgentState):
     """공고 정보 조회 데이터를 llm을 통해 자연어로 풀어줌"""
-    messages=[SYSTEM_PROMPT_postprocess]+state["messages"]
-    reponse=llm_postprocess.invoke(messages)
-    return {"messages":[reponse]}
+    last = state["messages"][-1]
+
+    data = json.loads(last.content)
+    if data.get("type")=="notice_result":
+
+        payload = data.get("payload", [])
+        response = llm_postprocess.invoke(
+            [SYSTEM_PROMPT_notice_result, HumanMessage(content=json.dumps(payload, ensure_ascii=False))]
+        )
+    elif data.get("type")=="report":
+        payload = data.get("payload", [])
+        response = llm_postprocess.invoke(
+            [SYSTEM_PROMPT_report, HumanMessage(content=payload)]
+        )
+    else:
+        return state
+
+    return {"messages":[response]}
 
 def human_input_node(state: AgentState):
     """
@@ -127,9 +179,11 @@ def human_input_node(state: AgentState):
     last_msg = state["messages"][-1] if state["messages"] else None
     if last_msg and isinstance(last_msg, HumanMessage):
         print(f"\n[System] 사용자 입력 수신: {last_msg.content[:20]}...")
-    return {}
+    return None
 
 def router_node(state: AgentState):
+    """입력이 질문인지 db조회 결과인지 확인해주는 노드"""
+    '''
     raw = state["messages"][-1].content
     if not raw:
         return "agent"
@@ -147,6 +201,20 @@ def router_node(state: AgentState):
 
     if obj.get("type") in ("notice_result", "report"):
         return "postprocess"
+
+    return "agent"
+    '''
+
+    raw = state["messages"][-1].content or ""
+    text=raw.strip()
+    try:
+        data = json.loads(text)
+
+        if data.get("type") in ["notice_result", "report"]:
+            return "postprocess"
+
+    except:
+        pass
 
     return "agent"
 

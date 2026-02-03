@@ -1,14 +1,14 @@
 # main.py
 import os
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, validator, root_validator
 from dotenv import load_dotenv
 from pyngrok import ngrok
 from langchain_core.messages import HumanMessage
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union, List
 import requests
 from pathlib import Path
 import PyPDF2
@@ -17,6 +17,7 @@ import logging
 import uuid
 import json
 from langchain_core.messages import ToolMessage
+import tempfile
 
 # 분리된 그래프 앱 import
 from graph import graph_app
@@ -30,6 +31,123 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ==========================================
+# TFT + RAG Pipeline 초기화
+# ==========================================
+
+from BidAssitanceModel import BidRAGPipeline, extract_text_from_hwp, extract_text_from_hwpx, extract_text_from_pdf
+from get_probability_from_model import ProbabilityPredictor
+import re
+import uuid
+import os
+
+TFT_MODEL_PATH = './results_transformer/best_model.pt'
+
+def parsenumber(value: Any) -> Optional[float]:
+    """
+    다양한 형태의 숫자 문자열을 float로 변환
+    예: "1,000,000원" -> 1000000.0
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip()
+    s = re.sub(r'[^0-9.\-]', '', s.replace(',', ''))
+    try:
+        return float(s)
+    except:
+        return None
+
+
+# TFT 모델 로드
+try:
+    tft_predictor = ProbabilityPredictor(model_path=TFT_MODEL_PATH)
+    print("✅ TFT 모델 로드 성공")
+except Exception as e:
+    print("⚠️ TFT 모델 로드 실패:", e)
+    tft_predictor = None
+
+
+class TFTPredictorAdapter:
+    """RAG 파이프라인에서 사용할 TFT 모델 어댑터 - top_ranges 지원"""
+
+    def __init__(self, predictor):
+        self.predictor = predictor
+
+    def predict(self, requirements: Dict[str, Any], retrieved_context: str = "") -> Dict[str, Any]:
+        """입찰 요구사항을 기반으로 TFT 모델로 예측 수행 - top_ranges 포함"""
+        try:
+            if not self.predictor:
+                return {
+                    "error": "Model not loaded",
+                    "point_estimate": 0,
+                    "confidence": "error",
+                    "rationale": "TFT Model not loaded"
+                }
+
+            # 입력 데이터 파싱
+            pr_range = parsenumber(requirements.get('expected_price_range')) or 0.0
+            lower_rate = parsenumber(requirements.get('award_lower_rate')) or 0.0
+            estimate = parsenumber(requirements.get('estimate_price')) or 0.0
+            budget = parsenumber(requirements.get('budget')) or 0.0
+
+            input_dict = {
+                '예가범위': pr_range,
+                '낙찰하한율': lower_rate,
+                '추정가격': estimate,
+                '기초금액': budget
+            }
+
+            # TFT 모델로 확률 높은 상위 3개 구간 예측
+            result = self.predictor.get_highest_probability_ranges(
+                input_dict,
+                bin_width=0.001,
+                top_k=3
+            )
+
+            if result and result.get("top_ranges"):
+                top_ranges = result["top_ranges"]
+                return {
+                    "currency": "KRW",
+                    "point_estimate": float(top_ranges[0]["center"]),  # 가장 확률 높은 구간의 중심값
+                    "predicted_min": float(result["statistics"]["q25"]),  # 25% 분위수
+                    "predicted_max": float(result["statistics"]["q75"]),  # 75% 분위수
+                    "confidence": "high",
+                    "top_ranges": top_ranges,  # ✅ 상위 확률 구간들
+                    "statistics": result["statistics"],  # 추가 통계 정보
+                    "rationale": f"TFT Model - Top {len(top_ranges)} 확률 구간 분석 완료",
+                    "model_type": "QuantileTransformerRegressor"
+                }
+            else:
+                return {
+                    "error": "Prediction failed",
+                    "point_estimate": 0,
+                    "confidence": "low",
+                    "rationale": "TFT 예측 결과 없음"
+                }
+
+        except Exception as e:
+            print(f"❌ TFT 예측 오류: {e}")
+            return {
+                "error": str(e),
+                "point_estimate": 0,
+                "confidence": "error",
+                "rationale": f"Prediction Failed: {str(e)}"
+            }
+
+# RAG Pipeline 생성
+adapter = TFTPredictorAdapter(tft_predictor)
+
+rag_pipeline = BidRAGPipeline(
+    doc_dir="./rag_corpus",
+    index_dir="./rag_index",
+    award_predict_fn=adapter.predict
+)
+
+print("🚀 RAG + TFT Pipeline Ready")
 
 # =================================================================
 # 1. Config & Setup
@@ -80,9 +198,9 @@ async def log_requests(request: Request, call_next):
 
 # 요청 데이터 모델
 class ChatRequest(BaseModel):
-    type: str="query"
-    query: str=""
-    payload: Optional[Dict[str,Any]]=None
+    type: str="choose query | notice_result | reprot"
+    query: str="user question"
+    payload: Optional[Union[Dict[str, Any], List[Dict[str, Any]],str]] = None
     thread_id: str = "default_session"  # 세션 구분을 위한 ID
 
 class AnalyzeRequest(BaseModel):
@@ -133,6 +251,92 @@ async def general_exception_handler(request: Request, exc: Exception):
 @app.get("/status_check")
 def root():
     return {"status": "running", "message": "LangGraph API is active"}
+
+@app.post("/analyze")
+async def analyze(file: UploadFile = File(...),
+                  thread_id: str = Form("default")
+                  ):
+    """입찰공고 분석 + TFT 예측 + PDF 생성 + Azure 업로드"""
+    try:
+        # 1) 업로드 파일 이름 확인
+        filename = file.filename.lower()
+
+        # 2) 임시 저장
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
+            tmp.write(await file.read())
+
+        # 3) 파일 텍스트 추출
+        if filename.endswith(".pdf"):
+            extracted_text = extract_text_from_pdf(tmp_path)
+
+        elif filename.endswith(".hwp"):
+            extracted_text = extract_text_from_hwp(tmp_path)
+        
+        elif filename.endswith(".hwpx"):
+            extracted_text = extract_text_from_hwpx(tmp_path)
+        else:
+            os.remove(tmp_path)
+            raise HTTPException(
+                status_code=400,
+                detail="지원하지 않는 파일 형식입니다. (pdf/hwp/hwpx만 가능)"
+            )
+        
+        # 4) 추출 실패 체크
+        if not extracted_text.strip():
+            os.remove(tmp_path)
+            raise HTTPException(
+                status_code=400,
+                detail="파일에서 텍스트를 추출하지 못했습니다."
+            )
+        
+        # 1. RAG 파이프라인 분석 수행
+        result = rag_pipeline.analyze(
+            extracted_text,
+            thread_id=thread_id
+        )
+
+        report_md = result.get("report_markdown", "")
+        prediction_result = result.get("prediction_result", {})
+        os.remove(tmp_path)
+        '''
+        # 2. PDF 저장 폴더 준비
+        output_dir = "./output"
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        pdf_filename = f"report_{uuid.uuid4().hex[:6]}.pdf"
+        pdf_path = os.path.join(output_dir, pdf_filename)
+        
+        # 3. PDF 생성 및 Azure 업로드
+        final_url = None
+        try:
+            if not report_md:
+                raise ValueError("리포트 생성 실패: 마크다운 내용이 없습니다.")
+
+            generate_pdf(report_md, pdf_path)
+            full_pdf_path = os.path.abspath(pdf_path)
+
+            final_url = upload_to_azure(full_pdf_path, pdf_filename)
+        
+        except Exception as e:
+            print(f"❌ PDF/Azure 처리 실패: {e}")
+            #final_url = f"PDF 생성 실패: {str(e)}"
+        '''
+
+        # 4. 응답 반환
+        return {
+            #"extracted_requirements": result.get("requirements", {}),
+            #"prediction": prediction_result,  # ✅ top_ranges 포함됨
+            "report": report_md,
+            #"pdf_link": final_url,
+            "thread_id": thread_id
+        }
+
+    except Exception as e:
+        print(f"❌ /analyze 오류: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
@@ -185,13 +389,13 @@ async def chat_endpoint(req: ChatRequest):
                 if s.startswith("{") and s.endswith("}"):
                     resp_type = "search"
 
+
         return {
-            "type": resp_type,  # ✅ 핵심: req.type이 아니라 resp_type
+            "type": resp_type,
             "response": final_text,
             "thread_id": req.thread_id
         }
-
-
+        
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
