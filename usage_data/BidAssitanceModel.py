@@ -132,20 +132,21 @@ def _load_module_from_py(py_path: str):
 
 def extract_text_from_hwp(hwp_path: str) -> str:
     try:
-        f = olefile.OleFileIO(hwp_path)
-        dirs = f.listdir()
-        bodytext_dirs = [d for d in dirs if d[0].startswith('BodyText')]
-        full_text = []
-        for d in bodytext_dirs:
-            section = f.openstream(d).read()
-            try:
-                # HWP V5.0 이상은 zlib 압축을 사용함
-                decompressed = zlib.decompress(section, -15)
-                text = decompressed.decode('utf-16', errors='ignore')
-                full_text.append(text)
-            except:
-                continue
-        return "\n".join(full_text)
+        with olefile.OleFileIO(hwp_path) as f:
+            #f = olefile.OleFileIO(hwp_path)
+            dirs = f.listdir()
+            bodytext_dirs = [d for d in dirs if d[0].startswith('BodyText')]
+            full_text = []
+            for d in bodytext_dirs:
+                section = f.openstream(d).read()
+                try:
+                    # HWP V5.0 이상은 zlib 압축을 사용함
+                    decompressed = zlib.decompress(section, -15)
+                    text = decompressed.decode('utf-16', errors='ignore')
+                    full_text.append(text)
+                except:
+                    continue
+            return "\n".join(full_text)
     except Exception as e:
         print(f"❌ HWP 추출 에러: {e}")
         return ""
@@ -200,6 +201,10 @@ def read_input_text(input_path: str) -> str:
     ext = os.path.splitext(input_path)[1].lower()
     if ext == ".pdf":
         return extract_text_from_pdf(input_path)
+    elif ext == ".hwp":
+        return extract_text_from_hwp(input_path)
+    elif ext == ".hwpx":
+        return extract_text_from_hwpx(input_path)
     with open(input_path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 

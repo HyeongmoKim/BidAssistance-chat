@@ -198,7 +198,7 @@ async def log_requests(request: Request, call_next):
 
 # 요청 데이터 모델
 class ChatRequest(BaseModel):
-    type: str="choose query | notice_result | reprot"
+    type: str="choose query | notice_result | report"
     query: str="user question"
     payload: Optional[Union[Dict[str, Any], List[Dict[str, Any]],str]] = None
     thread_id: str = "default_session"  # 세션 구분을 위한 ID
