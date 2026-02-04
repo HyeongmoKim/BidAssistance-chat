@@ -10,6 +10,7 @@ langchain>=0.1.0
 langchain-openai>=0.0.5
 langchain-community>=0.0.20
 langchain-core>=0.1.25
+langchain-text-splitters>=0.0.1
 langgraph>=0.0.26
 openai>=1.10.0
 tiktoken>=0.5.2
@@ -17,22 +18,27 @@ tiktoken>=0.5.2
 # 벡터 데이터베이스
 faiss-cpu>=1.7.4
 
-# 데이터 처리 및 파일 로더 (Excel, Image)
+# 데이터 처리 및 수치 연산
 pandas>=2.1.0
-openpyxl                    # Excel 로딩(UnstructuredExcelLoader)에 필수
-unstructured[xlsx]          # Excel 로딩을 위해 [xlsx] 옵션 필요
-Pillow                      # PIL import (이미지 처리)
+numpy>=1.24.0
+
+# 파일 로더 및 오피스 문서 처리 (Excel, HWP, Image)
+openpyxl                    # Excel 로딩(UnstructuredExcelLoader)
+unstructured[xlsx]          # Excel 로딩
+Pillow                      # 이미지 처리
+olefile                     # HWP 파일 처리 필수
 pytesseract                 # OCR 처리
 
-# PDF 처리
-PyPDF2                      # main.py에서 사용됨 (pypdf 권장되나 코드가 PyPDF2 기준임)
+# PDF 처리 (코드에서 혼용 사용 중)
+PyPDF2                      # main.py 에서 사용
+pypdf                       # BidAssitanceModel.py 에서 사용
+pymupdf                     # BidAssitanceModel.py (fitz) 에서 사용
+md2pdf                      # 리포트 PDF 변환용
 
-# 이미지 캡셔닝 (ImageCaptionLoader 의존성)
-# 로컬 모델을 사용한다면 아래 두 개가 필요합니다. API 방식이라면 제거 가능하나, 안전하게 유지 권장.
+# ML/DL (TFT 모델 및 임베딩)
 torch>=2.0.0
 transformers>=4.36.0
 
 # 유틸리티
 python-dotenv>=1.0.0
 requests>=2.31.0
-pytesseract
