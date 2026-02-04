@@ -252,10 +252,12 @@ async def general_exception_handler(request: Request, exc: Exception):
 def root():
     return {"status": "running", "message": "LangGraph API is active"}
 
-@app.post("/analyze")
-async def analyze(file: UploadFile = File(...),
-                  thread_id: str = Form("default")
-                  ):
+@app.post("/chat/file")
+async def analyze(
+    file: UploadFile = File(...),      # Spring에서 보낸 파일
+    text: str = Form(...),             # Spring에서 보낸 질문 ("이 문서 요약해줘")
+    thread_id: str = Form("default")   # 세션 ID
+):
     """입찰공고 분석 + TFT 예측 + PDF 생성 + Azure 업로드"""
     try:
         # 1) 업로드 파일 이름 확인
