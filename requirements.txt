@@ -28,6 +28,7 @@ unstructured[xlsx]          # Excel 로딩
 Pillow                      # 이미지 처리
 olefile                     # HWP 파일 처리 필수
 pytesseract                 # OCR 처리
+python-multipart
 
 # PDF 처리 (코드에서 혼용 사용 중)
 PyPDF2                      # main.py 에서 사용
