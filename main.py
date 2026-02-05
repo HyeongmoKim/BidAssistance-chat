@@ -316,7 +316,7 @@ async def analyze(
         # LangGraph 입력 메시지 생성
         
         inputs = {"messages": [HumanMessage(content=llm_input)]}
-        config = {"configurable": {"thread_id": req.thread_id}}
+        config = {"configurable": {"thread_id": thread_id}}
         
         # 그래프 실행 (invoke는 동기 함수이므로 async def 안에서는 주의 필요)
         # LangGraph의 invoke()는 최종 상태를 반환합니다.
