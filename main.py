@@ -301,6 +301,31 @@ async def analyze(
         report_md = result.get("report_markdown", "")
         prediction_result = result.get("prediction_result", {})
         os.remove(tmp_path)
+
+        #report_md->json으로 만들어서 llm한테 넘겨주기 /chat 엔드포인트로 안넘겨주는건 통신속도가 느려서 /chat/file내에서 한번에 처리하기 위함
+        llm_input = json.dumps(
+            {
+                    "type": "report",
+                    "query": text,        # 사용자의 추가 요청 ("5줄 요약해줘")
+                    "payload": report_md,  # RAG 결과 리포트
+                    "thread_id":thread_id
+            },
+            ensure_ascii=False
+        )
+        
+        # LangGraph 입력 메시지 생성
+        
+        inputs = {"messages": [HumanMessage(content=content)]}
+        config = {"configurable": {"thread_id": req.thread_id}}
+        
+        # 그래프 실행 (invoke는 동기 함수이므로 async def 안에서는 주의 필요)
+        # LangGraph의 invoke()는 최종 상태를 반환합니다.
+        final_state = await graph_app.ainvoke(inputs, config=config)
+        
+        # 마지막 메시지(AI 답변) 추출
+        last_message = final_state["messages"][-1]
+        final_text = last_message.content if last_message else ""
+
         '''
         # 2. PDF 저장 폴더 준비
         output_dir = "./output"
@@ -330,7 +355,7 @@ async def analyze(
         return {
             #"extracted_requirements": result.get("requirements", {}),
             #"prediction": prediction_result,  # ✅ top_ranges 포함됨
-            "report": report_md,
+            "report": final_text,
             #"pdf_link": final_url,
             "thread_id": thread_id
         }
