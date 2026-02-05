@@ -252,7 +252,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 def root():
     return {"status": "running", "message": "LangGraph API is active"}
 
-@app.post("/analyze")
+@app.post("/chat/file")
 async def analyze(file: UploadFile = File(...),
                   thread_id: str = Form("default")
                   ):
@@ -334,7 +334,7 @@ async def analyze(file: UploadFile = File(...),
         }
 
     except Exception as e:
-        print(f"❌ /analyze 오류: {e}")
+        print(f"❌ /chat/file 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
