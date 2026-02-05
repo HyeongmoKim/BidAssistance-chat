@@ -252,12 +252,10 @@ async def general_exception_handler(request: Request, exc: Exception):
 def root():
     return {"status": "running", "message": "LangGraph API is active"}
 
-@app.post("/chat/file")
-async def analyze(
-    file: UploadFile = File(...),      # Spring에서 보낸 파일
-    text: str = Form(...),             # Spring에서 보낸 질문 ("이 문서 요약해줘")
-    thread_id: str = Form("default")   # 세션 ID
-):
+@app.post("/analyze")
+async def analyze(file: UploadFile = File(...),
+                  thread_id: str = Form("default")
+                  ):
     """입찰공고 분석 + TFT 예측 + PDF 생성 + Azure 업로드"""
     try:
         # 1) 업로드 파일 이름 확인
@@ -358,7 +356,7 @@ async def chat_endpoint(req: ChatRequest):
                 },
                 ensure_ascii=False
             )
-        
+        #만약에 tpye 형태가 qury 든 notice_result 아니면 예외 처리 필요 , report면 query도 받는데 이게 추가요청(5줄요약 등.)일수도 있으니 프롬프트 수정 필요
         #질문 형태가 아닌데 담겨오는 값이 없을 때
         if req.type != "query" and req.payload is None:
             raise HTTPException(status_code=400, detail="payload is required")
@@ -380,17 +378,13 @@ async def chat_endpoint(req: ChatRequest):
         resp_type = "chat"
 
         # 후처리 요청이면 summary로 고정
-        if req.type in ("notice_result", "report"):
-            resp_type = "summary"
-        else:
-            # tool이 마지막이거나 JSON처럼 보이면 search로 분류
-            if isinstance(last_message, ToolMessage):
-                resp_type = "search"
-            else:
-                s = (final_text or "").strip()
-                if s.startswith("{") and s.endswith("}"):
-                    resp_type = "search"
-
+        if req.type in ("notice_result"):
+            resp_type = "search"
+        '''
+        s = (final_text or "").strip()
+        if s.startswith("{") and s.endswith("}"):
+            resp_type = "search"
+        '''
 
         return {
             "type": resp_type,
