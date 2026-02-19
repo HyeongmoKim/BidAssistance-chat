@@ -258,7 +258,7 @@ async def analyze(
     text: str = Form(...),             # Spring에서 보낸 질문 ("이 문서 요약해줘")
     thread_id: str = Form("default")   # 세션 ID
 ):
-    """입찰공고 분석 + TFT 예측 + PDF 생성 + Azure 업로드"""
+    """입찰공고 분석 + TFT 예측 + PDF 생성"""
     try:
         # 1) 업로드 파일 이름 확인
         filename = file.filename.lower()
@@ -301,61 +301,10 @@ async def analyze(
         report_md = result.get("report_markdown", "")
         prediction_result = result.get("prediction_result", {})
         os.remove(tmp_path)
-        
-        #report_md->json으로 만들어서 llm한테 넘겨주기 /chat 엔드포인트로 안넘겨주는건 통신속도가 느려서 /chat/file내에서 한번에 처리하기 위함
-        llm_input = json.dumps(
-            {
-                    "type": "report",
-                    "query": text,        # 사용자의 추가 요청 ("5줄 요약해줘")
-                    "payload": report_md,  # RAG 결과 리포트
-                    "thread_id":thread_id
-            },
-            ensure_ascii=False
-        )
-        
-        # LangGraph 입력 메시지 생성
-        
-        inputs = {"messages": [HumanMessage(content=llm_input)]}
-        config = {"configurable": {"thread_id": thread_id}}
-        
-        # 그래프 실행 (invoke는 동기 함수이므로 async def 안에서는 주의 필요)
-        # LangGraph의 invoke()는 최종 상태를 반환합니다.
-        final_state = await graph_app.ainvoke(inputs, config=config)
-        
-        # 마지막 메시지(AI 답변) 추출
-        last_message = final_state["messages"][-1]
-        final_text = last_message.content if last_message else ""
 
-        '''
-        # 2. PDF 저장 폴더 준비
-        output_dir = "./output"
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        
-        pdf_filename = f"report_{uuid.uuid4().hex[:6]}.pdf"
-        pdf_path = os.path.join(output_dir, pdf_filename)
-        
-        # 3. PDF 생성 및 Azure 업로드
-        final_url = None
-        try:
-            if not report_md:
-                raise ValueError("리포트 생성 실패: 마크다운 내용이 없습니다.")
-
-            generate_pdf(report_md, pdf_path)
-            full_pdf_path = os.path.abspath(pdf_path)
-
-            final_url = upload_to_azure(full_pdf_path, pdf_filename)
-        
-        except Exception as e:
-            print(f"❌ PDF/Azure 처리 실패: {e}")
-            #final_url = f"PDF 생성 실패: {str(e)}"
-        '''
-
-        # 4. 응답 반환
+        # 2. 응답 반환
         return {
-            #"extracted_requirements": result.get("requirements", {}),
-            #"prediction": prediction_result,  # ✅ top_ranges 포함됨
-            "report": final_text,
+            "report": report_md,
             #"pdf_link": final_url,
             "thread_id": thread_id
         }
@@ -383,7 +332,6 @@ async def chat_endpoint(req: ChatRequest):
                 },
                 ensure_ascii=False
             )
-        #만약에 tpye 형태가 qury 든 notice_result 아니면 예외 처리 필요 , report면 query도 받는데 이게 추가요청(5줄요약 등.)일수도 있으니 프롬프트 수정 필요
         #질문 형태가 아닌데 담겨오는 값이 없을 때
         if req.type != "query" and req.payload is None:
             raise HTTPException(status_code=400, detail="payload is required")
@@ -401,18 +349,26 @@ async def chat_endpoint(req: ChatRequest):
         last_message = final_state["messages"][-1]
         final_text = last_message.content if last_message else ""
 
-        # ✅ 응답 type 결정 (요청 type(req.type) 말고 "결과" 기준)
+        # 응답 type 결정 (요청 type(req.type) 말고 "결과" 기준)
         resp_type = "chat"
 
         # 후처리 요청이면 summary로 고정
         if req.type in ("notice_result"):
             resp_type = "search"
-
-        s = (final_text or "").strip()
-        if s.startswith("{") and s.endswith("}"):
-            resp_type = "search"
-
-
+        
+        # pydantic 에러 감지
+        parsed=None
+        try:
+            parsed = json.loads(final_text)
+        except:
+            pass
+        if isinstance(parsed, dict) and parsed.get("__error__") == "pydantic_validation":
+            return {
+                "type": resp_type,
+                "response": "질문이 조금 모호합니다. \n원하시는 조건을 조금 더 자세히 말씀해 주시길바랍니다.",
+                "thread_id": req.thread_id
+        }
+        
         return {
             "type": resp_type,
             "response": final_text,
@@ -421,71 +377,6 @@ async def chat_endpoint(req: ChatRequest):
         
     except Exception as e:
         print(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/input_content")
-async def input_content_endpoint(req: AnalyzeRequest):
-    """
-    파일 URL 또는 PDF 경로에서 파일을 읽어 분석하는 엔드포인트
-    (텍스트는 /chat 엔드포인트 사용)
-    """
-    content = None
-    source = None
-    
-    # 파일 URL에서 다운로드 및 처리
-    if req.file_url:
-        try:
-            response = requests.get(req.file_url, timeout=30)
-            response.raise_for_status()
-            content = response.text
-            source = "file_url"
-        except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=400, detail=f"Failed to download file: {str(e)}")
-    
-    # PDF 파일 경로에서 텍스트 추출
-    elif req.pdf_path:
-        try:
-            pdf_path = Path(req.pdf_path)
-            if not pdf_path.exists():
-                raise HTTPException(status_code=400, detail=f"PDF file not found: {req.pdf_path}")
-            
-            with open(pdf_path, 'rb') as pdf_file:
-                pdf_reader = PyPDF2.PdfReader(pdf_file)
-                content = ""
-                for page in pdf_reader.pages:
-                    content += page.extract_text()
-            source = "pdf_path"
-        except HTTPException:
-            # HTTPException은 그대로 전파
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to read PDF: {str(e)}")
-    
-    # 텍스트 입력 (plain text는 /chat 엔드포인트 사용 권장)
-    elif req.text:
-        content = req.text
-        source = "text"
-    
-    # LangGraph를 실행하여 분석
-    try:
-        inputs = {"messages": [HumanMessage(content=str(content))]}
-        # 고유한 thread_id 생성
-        thread_id = f"analyze_{uuid.uuid4().hex[:8]}"
-        config = {"configurable": {"thread_id": thread_id}}
-        
-        final_state = await graph_app.ainvoke(inputs, config=config)
-        last_message = final_state["messages"][-1]
-        
-        return {
-            "source": source,
-            "content_length": len(str(content)),
-            "content_preview": str(content)[:200] + "..." if len(str(content)) > 200 else str(content),
-            "response": last_message.content,
-            "thread_id": thread_id,
-            "status": "success"
-        }
-    except Exception as e:
-        logger.error(f"Error in graph execution: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # =================================================================
