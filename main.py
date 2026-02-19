@@ -301,7 +301,7 @@ async def analyze(
         report_md = result.get("report_markdown", "")
         prediction_result = result.get("prediction_result", {})
         os.remove(tmp_path)
-
+        
         #report_md->json으로 만들어서 llm한테 넘겨주기 /chat 엔드포인트로 안넘겨주는건 통신속도가 느려서 /chat/file내에서 한번에 처리하기 위함
         llm_input = json.dumps(
             {

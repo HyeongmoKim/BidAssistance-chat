@@ -1,3 +1,4 @@
+#AI 브랜치 파일 그대로 쓴 것임
 import torch
 import torch.nn as nn
 import numpy as np
@@ -46,7 +47,7 @@ class QuantileTransformerRegressor(nn.Module):
 class ProbabilityPredictor:
     """TFT 4-Feature 모델을 사용한 확률 예측 클래스"""
 
-    def __init__(self, model_path='./results_transformer/best_model.pt'):
+    def __init__(self, model_path='./results_tft_4feat/best_model.pt'):
         self.model_path = model_path
         self.device = device
         self.quantiles = np.linspace(0.001, 0.999, 999)
@@ -65,17 +66,19 @@ class ProbabilityPredictor:
             raise FileNotFoundError(f"모델 파일을 찾을 수 없습니다: {self.model_path}")
 
         checkpoint = torch.load(self.model_path, map_location=self.device)
-        # model_state_dict 키 있으면 사용, 없으면 checkpoint 자체가 state_dict
+
+        # state_dict가 직접 저장된 경우와 딕셔너리로 저장된 경우 모두 지원
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            print(f"✓ 모델 로드 완료: {self.model_path}")
+            if 'epoch' in checkpoint:
+                print(f"  Epoch: {checkpoint['epoch']}, Val Loss: {checkpoint.get('val_loss', 0):.6f}")
         else:
+            # state_dict가 직접 저장된 경우
             model.load_state_dict(checkpoint, strict=False)
+            print(f"✓ 모델 로드 완료 (direct state_dict): {self.model_path}")
+
         model.eval()
-
-        print(f"✓ 모델 로드 완료: {self.model_path}")
-        if isinstance(checkpoint, dict) and 'epoch' in checkpoint:
-            print(f"  Epoch: {checkpoint['epoch']}, Val Loss: {checkpoint.get('val_loss', 0):.6f}")
-
         return model
 
     def _prepare_input(self, input_features):
@@ -92,8 +95,9 @@ class ProbabilityPredictor:
             if X.shape[1] != 4:
                 raise ValueError(f"입력 피처는 4개여야 합니다. 현재: {X.shape[1]}개")
 
-        if self.scaler is not None:
-            X = self.scaler.transform(X)
+        # 추정가격, 기초금액을 1e8 단위로 정규화
+        X[0, 2] = X[0, 2] / 1e8
+        X[0, 3] = X[0, 3] / 1e8
 
         return X
 
@@ -125,8 +129,8 @@ class ProbabilityPredictor:
         return {
             'probability': float(probability),
             'probability_percent': float(probability * 100),
-            'lower_bound': lower_bound,
-            'upper_bound': upper_bound,
+            'lower_bound': float(lower_bound),
+            'upper_bound': float(upper_bound),
             'lower_quantile_index': int(lower_idx),
             'upper_quantile_index': int(upper_idx),
             'median_prediction': float(pred_quantiles[499]),
@@ -247,12 +251,18 @@ class ProbabilityPredictor:
             probability = avg_pdf * bin_width
 
             bin_info.append({
-                'range': f'{(lower - 1) * 100:+.1f}% ~ {(upper - 1) * 100:+.1f}%',  # 증감으로 표시, 0.1%p 단위, ~ 앞뒤 공백
+                # 프론트엔드 표시용 (명확한 필드명)
+                'range_display': f'{abs(lower - 1) * 100:.1f}% ~ {abs(upper - 1) * 100:.1f}%',  # 구간
+                'rate': float(abs((lower + upper) / 2 - 1) * 100),  # 사정율 (%) - Python float
+                'probability': float(probability * 100),  # 확률 (%) - Python float
+
+                # 기존 필드 (하위 호환성)
+                'range': f'{abs(lower - 1) * 100:.1f}% ~ {abs(upper - 1) * 100:.1f}%',
                 'lower': float(lower),
                 'upper': float(upper),
-                'center': float((lower + upper) / 2),
-                'pdf': avg_pdf,  # 확률밀도 f(y)
-                'probability': float(probability),  # P(y ∈ [lower, upper]) - 정규화 전
+                'center': float((lower + upper) / 2),  # 배율 (1 + 사정율)
+                'center_percent': float(abs((lower + upper) / 2 - 1) * 100),  # 사정율 백분율
+                'pdf': float(avg_pdf),  # 확률밀도 f(y)
                 'probability_percent': float(probability * 100)
             })
 
@@ -276,8 +286,12 @@ class ProbabilityPredictor:
             'top_ranges': sorted_bins[:top_k],
             'all_ranges': sorted_bins,
             'total_bins': len(sorted_bins),
-            'bin_width': bin_width,
-            'prediction_range': {'min': min_val, 'max': max_val, 'range': max_val - min_val},
+            'bin_width': float(bin_width),
+            'prediction_range': {
+                'min': float(min_val),
+                'max': float(max_val),
+                'range': float(max_val - min_val)
+            },
             'statistics': {
                 'median': float(pred_quantiles[499]),
                 'mean': float(np.mean(pred_quantiles)),
@@ -348,7 +362,7 @@ def main():
     print("TFT 4-Feature 모델 - 가장 확률이 높은 구간 예측")
     print("=" * 80)
 
-    predictor = ProbabilityPredictor(model_path='./results_transformer/best_model.pt')
+    predictor = ProbabilityPredictor(model_path='./results_tft_4feat/best_model.pt')
 
     # 예시 입력값
     input_dict = {

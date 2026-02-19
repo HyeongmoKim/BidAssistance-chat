@@ -43,8 +43,8 @@ SYSTEM_PROMPT = SystemMessage(
 
 사용자 질문을 다음 세 가지 유형 중 하나로 분류하라.
 
-[유형 1: 사이트 기능 / 사용법 질문]
-- 사이트의 화면, 메뉴, 버튼, 기능 사용 방법을 묻는 질문
+[유형 1: 사이트 기능, 사용법 / 챗봇 질문]
+- 사이트의 화면, 메뉴, 버튼, 기능 사용 방법을 묻는 질문, 챗봇의 사용에 관한 질문
 - 이 경우 반드시 usage_tool을 호출하라.
 - usage_tool의 반환값을 그대로 사용자에게 자연어로 전달하라.
 
@@ -52,6 +52,7 @@ SYSTEM_PROMPT = SystemMessage(
 - 로그인은 어디서 하나요?
 - 공고 검색은 어떻게 하나요?
 - PDF 다운로드 버튼이 안 보여요
+- 챗봇에게 질문을 하고 싶어요
 
 [유형 2: 공고 조회 / 조건 추출 질문]
 - 공고 검색, 지역, 금액, 기간 등 데이터 조회를 위한 조건을 묻는 질문
@@ -124,7 +125,7 @@ SYSTEM_PROMPT_notice_result=SystemMessage(
     입력 JSON 리스트를 받으면 즉시 위 형식으로 요약하라.
 """
 )
-
+'''
 SYSTEM_PROMPT_report=SystemMessage(
     content="""
     너는 공공입찰 공고 제안/투찰 분석 보고서를 사용자에게 핵심만 요약하는 도우미이다.
@@ -141,7 +142,7 @@ SYSTEM_PROMPT_report=SystemMessage(
     3줄 정도로 간단히 요약해라.
 """
 )
-
+'''
 
 def agent_node(state: AgentState):
     """LLM이 다음 행동(답변 or 툴호출)을 결정"""   
@@ -162,6 +163,8 @@ def postprocess_node(state: AgentState):
         response = llm_postprocess.invoke(
             [SYSTEM_PROMPT_notice_result, HumanMessage(content=json.dumps(payload, ensure_ascii=False))]
         )
+        return {"messages":[response]}
+    '''
     elif data.get("type")=="report":
         payload = data.get("payload", [])
         response = llm_postprocess.invoke(
@@ -169,8 +172,8 @@ def postprocess_node(state: AgentState):
         )
     else:
         return state
-
-    return {"messages":[response]}
+    '''
+    return state
 
 def human_input_node(state: AgentState):
     """

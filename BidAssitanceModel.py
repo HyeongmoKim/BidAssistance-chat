@@ -1,42 +1,4 @@
-"""Bid Assistance RAG Pipeline (LangGraph)
-
-공고문 -> LLM 추출 -> ToolNode(RAG+낙찰가예측+경쟁) -> LLM 리포트
-
-요구 파일/아티팩트
------------------
-- model_1dcnn.py (사용자 업로드 코드)
-- best_model.pt (학습 코드에서 저장되는 state_dict)
-- scalers.json 또는 scalers.npz (필수 권장: X/y 스케일러 + target_log 설정)
-
-의존성
-------
-pip install langgraph langchain-core langchain-openai langchain-community langchain-text-splitters pydantic faiss-cpu openai
-# PDF 입력을 쓰면(둘 중 하나 권장):
-#   pip install pypdf
-#   pip install pymupdf
-# CNN1D 모델을 쓰면 추가:
-pip install torch numpy pandas matplotlib
-
-환경변수
---------
-OPENAI_API_KEY 설정(권장) 또는 api_key.txt에 KEY=VALUE 형식으로 저장.
-
-CLI 사용
---------
-python BidAssitanceModel_fixed_pdf.py \
-  --doc_dir ./rag_corpus \
-  --index_dir ./rag_index \
-  --input bid_notice.txt \
-  --award_model ./model_1dcnn.py \
-  --award_weights ./results/best_model.pt \
-  --award_scaler ./results/scalers.json
-
-주의
-----
-- scalers.json(.npz)가 없으면, CNN1D 모델은 올바른 역변환이 불가능하므로
-  예측을 수행하지 않고 low-confidence로 반환합니다.
-"""
-
+#AI 브랜치 파일 그대로 쓴 것임
 from __future__ import annotations
 
 import inspect
@@ -132,21 +94,20 @@ def _load_module_from_py(py_path: str):
 
 def extract_text_from_hwp(hwp_path: str) -> str:
     try:
-        with olefile.OleFileIO(hwp_path) as f:
-            #f = olefile.OleFileIO(hwp_path)
-            dirs = f.listdir()
-            bodytext_dirs = [d for d in dirs if d[0].startswith('BodyText')]
-            full_text = []
-            for d in bodytext_dirs:
-                section = f.openstream(d).read()
-                try:
-                    # HWP V5.0 이상은 zlib 압축을 사용함
-                    decompressed = zlib.decompress(section, -15)
-                    text = decompressed.decode('utf-16', errors='ignore')
-                    full_text.append(text)
-                except:
-                    continue
-            return "\n".join(full_text)
+        f = olefile.OleFileIO(hwp_path)
+        dirs = f.listdir()
+        bodytext_dirs = [d for d in dirs if d[0].startswith('BodyText')]
+        full_text = []
+        for d in bodytext_dirs:
+            section = f.openstream(d).read()
+            try:
+                # HWP V5.0 이상은 zlib 압축을 사용함
+                decompressed = zlib.decompress(section, -15)
+                text = decompressed.decode('utf-16', errors='ignore')
+                full_text.append(text)
+            except:
+                continue
+        return "\n".join(full_text)
     except Exception as e:
         print(f"❌ HWP 추출 에러: {e}")
         return ""
@@ -201,10 +162,6 @@ def read_input_text(input_path: str) -> str:
     ext = os.path.splitext(input_path)[1].lower()
     if ext == ".pdf":
         return extract_text_from_pdf(input_path)
-    elif ext == ".hwp":
-        return extract_text_from_hwp(input_path)
-    elif ext == ".hwpx":
-        return extract_text_from_hwpx(input_path)
     with open(input_path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
@@ -1054,7 +1011,32 @@ class BidRAGPipeline:
                 "사용자가 제공한 공고문 텍스트에서 요구사항을 구조화해 추출하라. "
                 "숫자는 가능하면 원 단위 숫자(float/int)로 정규화하고, "
                 "확실하지 않으면 null로 둔다. "
-                "특히 낙찰가 모델 입력을 위해 예가범위(expected_price_range), 낙찰하한율(award_lower_rate)도 추출을 시도하라."
+                "특히 낙찰가 모델 입력을 위해 예가범위(expected_price_range), 낙찰하한율(award_lower_rate)도 추출을 시도하라.\n\n"
+                "중요: 다음 3가지를 추출하라 (공고문에 없으면 일반적인 요건 제시):\n\n"
+                "1) qualification_requirements (참가자격):\n"
+                "   **우선순위 1: 공고문에서 직접 찾기**\n"
+                "   - 공고문에서 '면허', '등록', '자격', '업종', '허가' 등이 포함된 문장 찾기\n"
+                "   - 예: '건설업 면허 보유자', '조경공사업 등록업체'\n"
+                "   **우선순위 2: 공고문에 없으면 일반 요건 제시**\n"
+                "   - title 필드를 보고 공사/용역 유형 파악\n"
+                "   - 공사 (예: '○○공사', '시설공사', '건축'): ['건설업 면허 보유', '해당 업종 등록업체']\n"
+                "   - 용역 (예: '○○용역', '컨설팅'): ['사업자등록증 보유', '관련 업종 등록']\n"
+                "   - 물품: ['제조업체 또는 판매업체']\n\n"
+                "2) performance_requirements (실적요건):\n"
+                "   **우선순위 1: 공고문에서 직접 찾기**\n"
+                "   - '실적', '유사', '동일', '수행경험' 등이 포함된 문장\n"
+                "   **우선순위 2: 공고문에 없으면 일반 요건 제시**\n"
+                "   - 공사: ['유사 공사 실적 보유']\n"
+                "   - 용역: ['유사 용역 수행 실적']\n"
+                "   - 물품: ['납품 실적']\n\n"
+                "3) document_requirements (제출서류):\n"
+                "   - 기본 서류는 항상 포함: ['입찰참가신청서', '사업자등록증']\n"
+                "   - 공고문에 추가 서류 명시되어 있으면 함께 포함\n"
+                "   - 공사인 경우: 건설업등록증, 실적증명서도 일반적으로 포함\n\n"
+                "핵심:\n"
+                "- 공고문에 명시된 내용 우선\n"
+                "- 없으면 공사/용역 유형 보고 일반적인 요건 제시\n"
+                "- 절대 빈 리스트로 두지 마라"
             )
         )
 
@@ -1091,6 +1073,55 @@ class BidRAGPipeline:
             val = reqs_dict.get(k, [])
             if isinstance(val, list):
                 reqs_dict[k] = [_clean_whitespace(x) for x in val if str(x).strip()]
+
+        # 🔧 빈 리스트 체크 및 기본값 추가
+        title = reqs_dict.get('title', '') or ''
+        category = reqs_dict.get('category', '') or ''
+        title_lower = title.lower()
+        category_lower = category.lower()
+
+        # 1) 참가자격이 비어있으면 공사/용역 유형에 따라 기본값 추가
+        if not reqs_dict.get('qualification_requirements'):
+            if '공사' in title or '건설' in title or '시설' in title or '조성' in title:
+                reqs_dict['qualification_requirements'] = ['해당 업종 건설업 면허 보유자']
+            elif '용역' in title or '컨설팅' in title:
+                reqs_dict['qualification_requirements'] = ['해당 분야 사업자등록 또는 면허 보유자']
+            elif '물품' in title or '구매' in title:
+                reqs_dict['qualification_requirements'] = ['해당 물품 제조 또는 판매업 등록자']
+            else:
+                reqs_dict['qualification_requirements'] = ['사업자등록 보유자']
+
+        # 2) 실적요건이 비어있으면 기본값 추가
+        if not reqs_dict.get('performance_requirements'):
+            if '공사' in title or '건설' in title or '시설' in title or '조성' in title:
+                reqs_dict['performance_requirements'] = ['유사 공사 수행실적 (공고문 첨부파일 확인 필요)']
+            elif '용역' in title or '컨설팅' in title:
+                reqs_dict['performance_requirements'] = ['유사 용역 수행실적 (공고문 첨부파일 확인 필요)']
+            elif '물품' in title or '구매' in title:
+                reqs_dict['performance_requirements'] = ['동일 또는 유사 물품 납품실적 (공고문 첨부파일 확인 필요)']
+            else:
+                reqs_dict['performance_requirements'] = ['유사 프로젝트 수행실적 (공고문 첨부파일 확인 필요)']
+
+        # 3) 제출서류는 기본 서류 항상 포함
+        if not reqs_dict.get('document_requirements'):
+            reqs_dict['document_requirements'] = ['입찰참가신청서', '사업자등록증']
+            if '공사' in title or '건설' in title:
+                reqs_dict['document_requirements'].extend(['건설업등록증', '실적증명서'])
+        else:
+            # 기본 서류가 없으면 추가
+            docs = reqs_dict['document_requirements']
+            if '입찰참가신청서' not in docs:
+                docs.insert(0, '입찰참가신청서')
+            if '사업자등록증' not in docs:
+                docs.insert(1, '사업자등록증')
+
+        # 🔍 디버깅: 추출된 요구사항 출력
+        print("=" * 60)
+        print(" [DEBUG] 추출된 요구사항:")
+        print(f"  - 참가자격: {reqs_dict.get('qualification_requirements', [])}")
+        print(f"  - 실적요건: {reqs_dict.get('performance_requirements', [])}")
+        print(f"  - 제출서류: {reqs_dict.get('document_requirements', [])}")
+        print("=" * 60)
 
         state["requirements"] = reqs_dict
         return state
@@ -1132,7 +1163,6 @@ class BidRAGPipeline:
         print(" [DEBUG] _node_report - prediction_result:")
         print(json.dumps(pred, indent=2, ensure_ascii=False))
         print("=" * 60)
-        # <--- 예측 결과 가져오기
 
         reqs_json = json.dumps(reqs, ensure_ascii=False)
         pred_json = json.dumps(pred, ensure_ascii=False)
@@ -1146,18 +1176,69 @@ class BidRAGPipeline:
                 "필수 섹션(순서 유지):\n"
                 "# 1. 공고 요약\n"
                 "# 2. 참가자격/실적/제출서류 체크리스트\n"
-                "# 3. 낙찰가 예측(범위/포인트/근거/리스크)\n"
+                "   이 섹션은 3개의 소제목으로 명확히 구분하라:\n\n"
+                "   ## 가. 참가자격 요건\n"
+                "   qualification_requirements 리스트의 각 항목을 표시:\n"
+                "   - 형식: '• 항목명' (불릿 포인트만 사용, 체크박스 절대 사용 금지)\n"
+                "   - 예시:\n"
+                "     • 건설업 면허 보유자\n"
+                "     • 조경공사업 등록업체\n"
+                "   - 리스트에 항목이 있으면 그대로 표시\n"
+                "   - 리스트가 비어있어도 절대 '공고문에 명시된 자격요건 없음'이라고 쓰지 마라\n\n"
+                "   ## 나. 실적 요건\n"
+                "   performance_requirements 리스트의 각 항목을 표시:\n"
+                "   - 형식: '• 항목명' (불릿 포인트만 사용)\n"
+                "   - 예시: '• 최근 3년 이내 유사공사 실적 1건 이상'\n"
+                "   - 리스트에 항목이 있으면 그대로 표시\n\n"
+                "   ## 다. 제출서류\n"
+                "   document_requirements 리스트의 각 항목을 표시:\n"
+                "   - 형식: '• 항목명' (불릿 포인트만 사용)\n"
+                "   - 예시:\n"
+                "     • 입찰참가신청서\n"
+                "     • 사업자등록증\n"
+                "     • 건설업등록증\n"
+                "   - 리스트에 항목이 있으면 그대로 표시\n\n"
+                "   ⚠️ 중요: 절대로 '- [ ]' 체크박스를 사용하지 마라. 오직 '•' 불릿만 사용하라.\n\n"
+                                # =========================================================
+                # [모델v2대응] 섹션 3 프롬프트를 "top_ranges 있으면 TFT 형식 / 없으면 v2 형식"으로 변경
+                # =========================================================
+                "# 3. 낙찰가 예측(범위/포인트/근거/)\n"
+                "   - 예측 결과(prediction_result)에 따라 다음 2가지 중 하나로 작성하라.\n\n"
+                "   [A안: top_ranges가 존재하는 경우]\n"
+                "   - (기존 방식 유지) 반드시 '### 사정율 구간에 따른 상위 3개의 확률' 소제목을 포함하라.\n"
+                "   - top_ranges의 각 항목에서 다음 정보를 표시:\n"
+                "     * range_display (구간)\n"
+                "     * rate (사정율)\n"
+                "     * probability (확률)\n"
+                "   - 형식: '• N순위: 구간 {range_display}, 사정율 {rate:.2f}%, 확률 {probability:.2f}%'\n\n"
+                "   [B안: top_ranges가 없는 경우 (V2 모델)]\n"
+                "   - 아래 3줄을 반드시 포함하라(순서 유지):\n"
+                "     1) 예측 투찰율(%): predicted_percent\n"
+                "     2) 예측 낙찰가(원): point_estimate (기초금액 × 투찰율 × 낙찰하한율)\n"
+                "     3) 근거: 'v2 모델 결과 + (y_pred_transformed / 100) + 100 역산 적용'\n"
+                "   - 형식은 깔끔한 불릿 또는 한 줄 요약 형태로 작성하라.\n"
+
                 "# 4. 권고 액션(다음 72시간 To-Do)\n\n"
                 "제약: 근거가 불충분하면 '가정'으로 명시하고 추가 수집 항목을 제시하라."
             )
         )
-
         ctx = SystemMessage(content=(
         f"[추출된 요구사항]\n{reqs_json}\n\n"
         f"[낙찰가 예측 모델 결과]\n{pred_json}"
         ))
         final = self.llm.invoke([sys, ctx] + messages)
         report = final.content if isinstance(final, AIMessage) else str(final)
+
+        import re
+        report = re.sub(
+            r'(구간\s*)(\d+\.\d{2})\d*%\s*~\s*(\d+\.\d{2})\d*%',
+            r'\1\2% ~ \3%',
+            report
+        )
+
+
+
+
         state["report_markdown"] = report
         return state
 
