@@ -407,11 +407,11 @@ async def chat_endpoint(req: ChatRequest):
         # 후처리 요청이면 summary로 고정
         if req.type in ("notice_result"):
             resp_type = "search"
-        '''
+
         s = (final_text or "").strip()
         if s.startswith("{") and s.endswith("}"):
             resp_type = "search"
-        '''
+
 
         return {
             "type": resp_type,
