@@ -37,12 +37,11 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 from BidAssitanceModel import BidRAGPipeline, extract_text_from_hwp, extract_text_from_hwpx, extract_text_from_pdf
+from tft_v3_predictor import predict_sajeong_percent, FEATURES, get_highest_probability_ranges_v3
 from get_probability_from_model import ProbabilityPredictor
 import re
 import uuid
 import os
-
-TFT_MODEL_PATH = './results_transformer/best_model.pt'
 
 def parsenumber(value: Any) -> Optional[float]:
     """
@@ -60,16 +59,8 @@ def parsenumber(value: Any) -> Optional[float]:
         return float(s)
     except:
         return None
-
-
-# TFT 모델 로드
-try:
-    tft_predictor = ProbabilityPredictor(model_path=TFT_MODEL_PATH)
-    print("✅ TFT 모델 로드 성공")
-except Exception as e:
-    print("⚠️ TFT 모델 로드 실패:", e)
-    tft_predictor = None
-
+    
+tft_predictor = None
 
 class TFTPredictorAdapter:
     """RAG 파이프라인에서 사용할 TFT 모델 어댑터 - top_ranges 지원"""
@@ -110,14 +101,53 @@ class TFTPredictorAdapter:
 
             if result and result.get("top_ranges"):
                 top_ranges = result["top_ranges"]
+
+                # 🔍 디버그: top_ranges 상세 출력
+                print("=" * 60)
+                print(" [DEBUG] TFTPredictorAdapter - top_ranges 상세:")
+                for i, r in enumerate(top_ranges[:3], start=1):
+                    center_val = r.get("center")
+                    prob_val = r.get("probability")
+
+                    # center / probability가 [값, 소수자리] 형태면 값만 꺼냄
+                    if isinstance(center_val, list):
+                        center_val = center_val[0]
+                    if isinstance(prob_val, list):
+                        prob_val = prob_val[0]
+
+                    # range_display 없으면 lower/upper로 만들어줌
+                    range_display = r.get("range_display")
+                    if not range_display and r.get("lower") is not None and r.get("upper") is not None:
+                        range_display = f"{r['lower']:.2f}% ~ {r['upper']:.2f}%"
+
+                    print(f"  {i}순위:")
+                    print(f"    range_display: {range_display}")
+                    print(f"    center: {center_val:.2f}%")
+                    print(f"    probability: {prob_val:.2f}%")
+                print("=" * 60)
+                # 낙찰가 계산: 기초금액 × 배율(1+사정율) × 낙찰하한율
+                # center는 배율 (1 + 사정율) 형태
+                pred_multiplier = float(top_ranges[0]["center"])
+
+                # center가 99.xx 같은 퍼센트로 들어오는 경우 방어
+                if pred_multiplier > 2:
+                    pred_multiplier /= 100.0
+
+                # 낙찰가 = 기초금액 × 투찰배율(99%)
+                award_price = round(budget * pred_multiplier) if budget else None
+
+                # 퍼센트는 금액에서 역산 → 항상 일치
+                predicted_percent = (award_price / budget) * 100 if (award_price and budget) else None
+
                 return {
                     "currency": "KRW",
-                    "point_estimate": float(top_ranges[0]["center"]),  # 가장 확률 높은 구간의 중심값
-                    "predicted_min": float(result["statistics"]["q25"]),  # 25% 분위수
-                    "predicted_max": float(result["statistics"]["q75"]),  # 75% 분위수
+                    "point_estimate": award_price,  # 원 단위 낙찰가
+                    "predicted_sashiritsu": abs(pred_multiplier - 1),  # 사정율 (배율에서 변환)
+                    "predicted_min": abs(result["statistics"]["q25"] - 1),  # 사정율 하한
+                    "predicted_max": abs(result["statistics"]["q75"] - 1),  # 사정율 상한
                     "confidence": "high",
-                    "top_ranges": top_ranges,  # ✅ 상위 확률 구간들
-                    "statistics": result["statistics"],  # 추가 통계 정보
+                    "top_ranges": top_ranges,
+                    "statistics": result["statistics"],
                     "rationale": f"TFT Model - Top {len(top_ranges)} 확률 구간 분석 완료",
                     "model_type": "QuantileTransformerRegressor"
                 }
@@ -130,13 +160,112 @@ class TFTPredictorAdapter:
                 }
 
         except Exception as e:
-            print(f"❌ TFT 예측 오류: {e}")
+            print(f" TFT 예측 오류: {e}")
             return {
                 "error": str(e),
                 "point_estimate": 0,
                 "confidence": "error",
                 "rationale": f"Prediction Failed: {str(e)}"
             }
+        
+def v3_award_predict(requirements: Dict[str, Any], retrieved_context: str = "") -> Dict[str, Any]:
+    try:
+        pr_range = parsenumber(requirements.get('expected_price_range')) or 0.0
+        lower_rate_raw = parsenumber(requirements.get('award_lower_rate')) or 0.0
+        estimate = parsenumber(requirements.get('estimate_price')) or 0.0
+        budget = parsenumber(requirements.get('budget')) or 0.0
+
+        lower_rate = lower_rate_raw
+        if lower_rate > 1:
+            lower_rate = lower_rate / 100.0
+
+        feat = {name: 0.0 for name in FEATURES}
+        if "예가범위" in feat: feat["예가범위"] = float(pr_range)
+        if "낙찰하한율" in feat: feat["낙찰하한율"] = float(lower_rate_raw)
+        if "추정가격" in feat: feat["추정가격"] = float(estimate)
+        if "기초금액" in feat: feat["기초금액"] = float(budget)
+
+        #  top3 확률 구간
+        dist = get_highest_probability_ranges_v3(feat, bin_width=0.0001, top_k=3)
+        top_ranges = dist.get("top_ranges", [])
+        statistics = dist.get("statistics", {})
+
+        #  중앙값 예측(배율)
+        pred_multiplier = float(predict_sajeong_percent(feat))
+        if pred_multiplier > 2:
+            pred_multiplier /= 100.0
+
+        award_price = round(budget * pred_multiplier) if budget else None
+        predicted_percent = (award_price / budget) * 100 if (award_price and budget) else None
+        lower_bound_price = round(budget * pred_multiplier * lower_rate) if (budget and lower_rate) else None
+
+
+        converted = []
+        for r in top_ranges:
+            # dist에서 오는 값들
+            center = float(r.get("center", 0.0))
+            low = float(r.get("lower", 0.0))
+            high = float(r.get("upper", 0.0))
+            prob = float(r.get("probability", 0.0))
+
+            # center/lower/upper가 배율(1.00xx) 형태면 퍼센트(100.xx)로 변환
+            # 예: 1.0027 -> 100.27
+            if center <= 2.0:
+                center *= 100.0
+                low *= 100.0
+                high *= 100.0
+
+            # 확률(prob)은 get_highest_probability_ranges_v3 결과가 보통 이미 % 스케일(예: 31.12)이라 가정
+            # 만약 0~1로 오는 경우(예: 0.3112)이면 %로 변환
+            if 0.0 <= prob <= 1.0:
+                prob *= 100.0
+
+            converted.append({
+                **r,
+
+                # ✅ LLM이 그대로 보고서에 쓰는 필드들
+                "range_display": f"{low:.2f}% ~ {high:.2f}%",
+                "rate": round(center, 2),  # 사정율(퍼센트 표기 값) → {rate:.2f}로 바로 출력 가능
+                "probability": round(prob, 2),  # 확률(%) → {probability:.2f}로 바로 출력 가능
+
+                # 참고용(숫자 보관)
+                "lower": round(low, 2),
+                "upper": round(high, 2),
+                "range": [round(low, 2), round(high, 2)],
+            })
+
+        top_ranges = converted
+
+        # statistics도 깔끔하게 (q25/q50/q75가 배율이면 %로 변환)
+        if isinstance(statistics, dict):
+            for k in ("q25", "q50", "q75"):
+                v = statistics.get(k)
+                if isinstance(v, (int, float)):
+                    v = float(v)
+                    if v <= 2.0:  # 배율이면
+                        v *= 100.0
+                    statistics[k] = round(v, 2)
+
+        return {
+            "currency": "KRW",
+            "point_estimate": award_price,
+            "predicted_percent": predicted_percent,
+            "confidence": "high",
+            "rationale": "TFT v3(pt) median quantile prediction (multiplier)",
+            "model_type": "v3_pt",
+            "pred_multiplier": pred_multiplier,
+            "lower_bound_price": lower_bound_price,
+            "top_ranges": top_ranges,
+            "statistics": statistics
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "point_estimate": 0,
+            "confidence": "error",
+            "rationale": f"V3 Prediction Failed: {str(e)}"
+        }
 
 # RAG Pipeline 생성
 adapter = TFTPredictorAdapter(tft_predictor)
@@ -144,7 +273,7 @@ adapter = TFTPredictorAdapter(tft_predictor)
 rag_pipeline = BidRAGPipeline(
     doc_dir="./rag_corpus",
     index_dir="./rag_index",
-    award_predict_fn=adapter.predict
+    award_predict_fn=v3_award_predict
 )
 
 print("🚀 RAG + TFT Pipeline Ready")
@@ -274,7 +403,6 @@ async def analyze(
 
         elif filename.endswith(".hwp"):
             extracted_text = extract_text_from_hwp(tmp_path)
-        
         elif filename.endswith(".hwpx"):
             extracted_text = extract_text_from_hwpx(tmp_path)
         else:

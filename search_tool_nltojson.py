@@ -271,7 +271,7 @@ def extract_notice_query(user_query: str) -> dict:
     - "최근 7일 이내" → from: { kind: calendar, unit: day, offset: -7, position: null }
     값을 해석하거나 날짜로 변환하지 않는다.
 
-    -"마감 임박" 같은 표현의 경우 마감일이 현재로부터 3일 이내인 공고를 조회하는 것과 동일하다.
+    -"마감 임박" 같은 표현의 경우 마감일이 현재로부터 3일 뒤까지인 공고를 조회하는 것과 동일하다.
     - "접수 중", "진행 중", "마감 전", "아직 마감되지 않은" 등의 표현은 endDate가 현재 시점 이후인 공고를 의미한다. 
       따라서 base는 반드시 endDate로 설정하고, from은 calendar offset=0, position=null 로 설정한다. to는 null로 설정한다.
     --------------------------------------------------
@@ -436,7 +436,7 @@ def extract_notice_query(user_query: str) -> dict:
     - bidRealId: 공고번호
     - name: 공고명
     - region: 지역
-    - organization: 발주기관
+    - organization: 발주기관명
     - estimatePrice: 추정가격
     - basicPrice: 기초금액
     - minimumBidRate: 낙찰하한율(%)
@@ -953,14 +953,14 @@ You must strictly follow this schema:
     출력은 json 객체 하나만 반환해라.
     """
     '''
-    messages=[SystemMessage(content=prompt), #promt: 긴 한국어 / prompt_kor: 짧은 한국어 / prompt_eng: 짧은 영어
+    messages=[SystemMessage(content=prompt_kor), #promt: 긴 한국어 / prompt_kor: 짧은 한국어 / prompt_eng: 짧은 영어
     HumanMessage(content=user_query)]
     #아래 주석은 응답시간 테스트용
-    #import time
-    #start=time.time()
+    import time
+    start=time.time()
     response = llm.invoke(messages)
-    #end=time.time()
-    #print("응답시간:",end-start)
+    end=time.time()
+    print("응답시간:",end-start)
     
     raw = response.content.strip()
 
