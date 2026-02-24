@@ -29,12 +29,13 @@ IMAGE_FAISS_DIR = BASE_DIR / "faiss_db" / "image_faiss"
 API_FAISS_DIR= BASE_DIR / "faiss_db" / "api_faiss"
 TEXT_FAISS_DIR= BASE_DIR / "faiss_db" / "txt_faiss"
 
-
+'''
 #로컬 테스트용, 경로에 한글이 있으면 C드라이브로 옮겨서 진행할 것
 BASE_DIR = Path("C:/faiss_db")
 IMAGE_FAISS_DIR = BASE_DIR / "image_faiss"
 API_FAISS_DIR= BASE_DIR / "api_faiss"
 TEXT_FAISS_DIR= BASE_DIR / "txt_faiss"
+'''
 
 # =========================
 # FAISS 생성 임베딩 모델 설정
