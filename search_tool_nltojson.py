@@ -953,7 +953,7 @@ You must strictly follow this schema:
     출력은 json 객체 하나만 반환해라.
     """
     '''
-    messages=[SystemMessage(content=prompt_kor), #promt: 긴 한국어 / prompt_kor: 짧은 한국어 / prompt_eng: 짧은 영어
+    messages=[SystemMessage(content=prompt), #promt: 긴 한국어 / prompt_kor: 짧은 한국어 / prompt_eng: 짧은 영어
     HumanMessage(content=user_query)]
     #아래 주석은 응답시간 테스트용
     import time
