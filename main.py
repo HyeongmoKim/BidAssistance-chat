@@ -429,7 +429,7 @@ async def analyze(
         report_md = result.get("report_markdown", "")
         prediction_result = result.get("prediction_result", {})
         os.remove(tmp_path)
-
+        
         # 2. 응답 반환
         return {
             "report": report_md,
@@ -496,7 +496,12 @@ async def chat_endpoint(req: ChatRequest):
                 "response": "질문이 조금 모호합니다. \n원하시는 조건을 조금 더 자세히 말씀해 주시길바랍니다.",
                 "thread_id": req.thread_id
         }
+
         
+        s = (final_text or "").strip()
+        if s.startswith("{") and s.endswith("}"):
+            resp_type = "search"
+
         return {
             "type": resp_type,
             "response": final_text,
